@@ -1,0 +1,29 @@
+idokep - weewx extension that sends data to www.idokep.hu
+Copyright 2014 Lorant Kurthy
+
+Installation instructions:
+
+1) expand the tarball:
+
+cd /var/tmp
+tar xvfz ~/Downloads/weewx-idokep.tgz
+
+2) copy files to the weewx user directory:
+
+cp /var/tmp/weewx-idokep/bin/user/idokep.py /home/weewx/bin/user
+
+3) modify weewx.conf:
+
+[StdRESTful]
+    [[IDOKEP]]
+        username = your IDOKEP username
+        password = your IDOKEP password
+
+[Engines]
+    [[WxEngine]]
+        restful_services = ... , user.idokep.IDOKEP
+
+4) restart weewx
+
+sudo /etc/init.d/weewx stop
+sudo /etc/init.d/weewx start
