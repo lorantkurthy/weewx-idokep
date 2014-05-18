@@ -6,7 +6,7 @@ Installation instructions:
 1) expand the tarball:
 
 cd /var/tmp
-tar xvfz ~/Downloads/weewx-idokep.tgz
+tar xvfz ~/Downloads/weewx-idokep-0.1.tar.gz
 
 2) copy files to the weewx user directory:
 
