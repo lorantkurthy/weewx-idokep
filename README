@@ -2,6 +2,17 @@ idokep - weewx extension that sends data to www.idokep.hu
 Copyright 2014 Lorant Kurthy
 
 Installation instructions:
+0) Download the release from github repo https://github.com/lorantkurthy/weewx-idokep to ~/Downloads/weewx-idokep-0.1.tar.gz
+
+You have two choices:
+
+Install with weewx's extension manager:
+
+1) in weewx directory run: ./setup.py --extension --install ~/Downloads/weewx-idokep-0.1.tar.gz
+
+OR
+
+Install from downloaded tarball:
 
 1) expand the tarball:
 
@@ -10,7 +21,7 @@ tar xvfz ~/Downloads/weewx-idokep-0.1.tar.gz
 
 2) copy files to the weewx user directory:
 
-cp /var/tmp/weewx-idokep/bin/user/idokep.py /home/weewx/bin/user
+cp /var/tmp/weewx-idokep-0.1/bin/user/idokep.py /home/weewx/bin/user
 
 3) modify weewx.conf:
 
