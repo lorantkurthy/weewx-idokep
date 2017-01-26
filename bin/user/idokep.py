@@ -35,9 +35,9 @@ from weeutil.weeutil import to_bool
 
 class IDOKEP(weewx.restx.StdRESTful):
     """Upload data to IDOKEP
-    http://www.idokep.hu
+    https://pro.idokep.hu
 
-    URL=http://www.idokep.hu/sendws.php?
+    URL=https://pro.idokep.hu/sendws.php?
     PARAMETERS:
         user=username
         pass=password
@@ -83,7 +83,7 @@ class IDOKEP(weewx.restx.StdRESTful):
 
 class IDOKEPThread(weewx.restx.RESTThread):
 
-    _SERVER_URL = 'http://www.idokep.hu/sendws.php'
+    _SERVER_URL = 'https://pro.idokep.hu/sendws.php'
     _FORMATS = {'barometer'   : '%.1f',
                 'outTemp'     : '%.1f',
                 'outHumidity' : '%.0f',
