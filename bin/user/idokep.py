@@ -1,33 +1,39 @@
 # Copyright 2014 Lorant Kurthy
-
+# 
 #==============================================================================
-# WeatherBug
+# Upload data to Idokep Pro
 #==============================================================================
-# Upload data to Idokep
-# http://www.idokep.hu
+# https://pro.idokep.hu
 #
 # To enable this module, put this file in bin/user, add the following to
 # weewx.conf, then restart weewx.
 #
-# [[IDOKEP]]
-#     username = your IDOKEP username
-#     password = your IDOKEP password
-#     log_success = True
-#     log_failure = True
-#     skip_upload = False
-#     station_type = WS23XX
+# [StdRESTful]
+#     [[IDOKEP]]
+#         username = your IDOKEP username
+#         password = your IDOKEP password
+#         log_success = True
+#         log_failure = True
+#         skip_upload = False
+#         station_type = WS23XX
+#
+# [Engine]
+#     [[Services]]
+#          restful_services = , user.idokep.IDOKEP
+#
 
-import Queue
+import queue
 import sys
 import syslog
 import time
-import urllib
-import urllib2
+import urllib.parse
+import urllib.request
 
 import weewx
 import weewx.restx
 import weewx.units
-from weeutil.weeutil import to_bool
+from weeutil.weeutil import to_bool, accumulateLeaves
+import weewx.manager
 
 #==============================================================================
 # IDOKEP
@@ -60,18 +66,48 @@ class IDOKEP(weewx.restx.StdRESTful):
     def __init__(self, engine, config_dict):
         super(IDOKEP, self).__init__(engine, config_dict)
         try:
-            site_dict = weewx.restx.get_dict(config_dict, 'IDOKEP')
-            site_dict['username']
-            site_dict['password']
-        except KeyError, e:
+            # Load config data
+            site_config = config_dict['StdRESTful']['IDOKEP']
+            site_dict = accumulateLeaves(site_config, max_level=1)
+
+            # Check availability of the necessary keys
+            if 'username' not in site_dict or 'password' not in site_dict:
+                raise KeyError('username or password')
+        except KeyError as e:
             syslog.syslog(syslog.LOG_DEBUG, "restx: IDOKEP: "
                           "Data will not be posted: Missing option %s" % e)
             return
-        site_dict.setdefault('station_type', 'WS23XX')
-        site_dict.setdefault('database_dict', config_dict['Databases'][config_dict['StdArchive']['archive_database']])
 
-        self.archive_queue = Queue.Queue()
-        self.archive_thread = IDOKEPThread(self.archive_queue, **site_dict)
+        # Set up defaults
+        site_dict.setdefault('station_type', 'WS23XX')
+        site_dict.setdefault('log_success', True)
+        site_dict.setdefault('log_failure', True)
+        site_dict.setdefault('skip_upload', False)
+        site_dict.setdefault('post_interval', 300)
+        site_dict.setdefault('max_backlog', sys.maxsize)
+        site_dict.setdefault('stale', None)
+        site_dict.setdefault('timeout', 60)
+        site_dict.setdefault('max_tries', 3)
+        site_dict.setdefault('retry_wait', 5)
+
+        # Initialize and start processing thread
+        self.archive_queue = queue.Queue()
+        self.archive_thread = IDOKEPThread(
+            self.archive_queue,
+            username=site_dict['username'],
+            password=site_dict['password'],
+            station_type=site_dict.get('station_type', 'WS23XX'),
+            server_url=site_dict.get('server_url', 'https://pro.idokep.hu/sendws.php'),
+            skip_upload=site_dict.get('skip_upload', False),
+            post_interval=site_dict.get('post_interval', 300),
+            max_backlog=site_dict.get('max_backlog', sys.maxsize),
+            stale=site_dict.get('stale', None),
+            log_success=site_dict.get('log_success', True),
+            log_failure=site_dict.get('log_failure', True),
+            timeout=site_dict.get('timeout', 60),
+            max_tries=site_dict.get('max_tries', 3),
+            retry_wait=site_dict.get('retry_wait', 5)
+        )
         self.archive_thread.start()
         self.bind(weewx.NEW_ARCHIVE_RECORD, self.new_archive_record)
         syslog.syslog(syslog.LOG_INFO, "restx: IDOKEP: "
@@ -84,35 +120,35 @@ class IDOKEP(weewx.restx.StdRESTful):
 class IDOKEPThread(weewx.restx.RESTThread):
 
     _SERVER_URL = 'https://pro.idokep.hu/sendws.php'
-    _FORMATS = {'barometer'   : '%.1f',
-                'outTemp'     : '%.1f',
-                'outHumidity' : '%.0f',
-                'windSpeed'   : '%.1f',
-                'windDir'     : '%.0f',
-                'hourRain'    : '%.2f',
-                'dayRain'     : '%.2f'}
+    _FORMATS = {
+        'barometer'   : '%.1f',
+        'outTemp'     : '%.1f',
+        'outHumidity' : '%.0f',
+        'windSpeed'   : '%.1f',
+        'windDir'     : '%.0f',
+        'rain'        : '%.2f',
+        'rainRate'    : '%.2f'
+    }
 
     def __init__(self, queue, username, password,
-                 database_dict,
                  station_type='WS23XX', server_url=_SERVER_URL, skip_upload=False,
-                 post_interval=300, max_backlog=sys.maxint, stale=None,
-                 log_success=True, log_failure=True, 
+                 post_interval=300, max_backlog=sys.maxsize, stale=None,
+                 log_success=True, log_failure=True,
                  timeout=60, max_tries=3, retry_wait=5):
-        """Initialize an instances of IDOKEPThread.
 
+        """Initialize an instance of IDOKEPThread.
         Required parameters:
 
-        username: IDOKEP user name
-
+        username: IDOKEP username
         password: IDOKEP password
-
-        station_type: weather station type
+        Please visit https://pro.idokep.hu to sign up and register your station in advance. Max password length for the station: 20. 
 
         Optional parameters:
-        
-        server_url: URL of the server
-        Default is the AWEKAS site
-        
+
+        station_type: weather station type
+        server_url: https://pro.idokep.hu/sendws.php
+        Default is the IDOKEP server
+
         log_success: If True, log a successful post in the system log.
         Default is True.
 
@@ -121,7 +157,7 @@ class IDOKEPThread(weewx.restx.RESTThread):
 
         max_backlog: How many records are allowed to accumulate in the queue
         before the queue is trimmed.
-        Default is sys.maxint (essentially, allow any number).
+        Default is sys.maxsize (allow any number).
 
         max_tries: How many times to try the post before giving up.
         Default is 3
@@ -140,17 +176,18 @@ class IDOKEPThread(weewx.restx.RESTThread):
         skip_upload: debugging option to display data but do not upload
         Default is False
         """
-        super(IDOKEPThread, self).__init__(queue,
-                                           protocol_name='IDOKEP',
-                                           database_dict=database_dict,
-                                           post_interval=post_interval,
-                                           max_backlog=max_backlog,
-                                           stale=stale,
-                                           log_success=log_success,
-                                           log_failure=log_failure,
-                                           timeout=timeout,
-                                           max_tries=max_tries,
-                                           retry_wait=retry_wait)
+        super(IDOKEPThread, self).__init__(
+            queue,
+            protocol_name='IDOKEP',
+            post_interval=post_interval,
+            max_backlog=max_backlog,
+            stale=stale,
+            log_success=log_success,
+            log_failure=log_failure,
+            timeout=timeout,
+            max_tries=max_tries,
+            retry_wait=retry_wait
+        )
         self.username = username
         self.password = password
         self.station_type = station_type
@@ -158,7 +195,7 @@ class IDOKEPThread(weewx.restx.RESTThread):
         self.skip_upload = to_bool(skip_upload)
 
     def get_record(self, record, archive):
-        # Get the record from my superclass
+        # Get the record from the superclass
         r = super(IDOKEPThread, self).get_record(record, archive)
         return r
 
@@ -168,43 +205,53 @@ class IDOKEPThread(weewx.restx.RESTThread):
         if self.skip_upload:
             syslog.syslog(syslog.LOG_DEBUG, "restx: IDOKEP: skipping upload")
             return
-        req = urllib2.Request(url)
+        req = urllib.request.Request(url)
         req.add_header("User-Agent", "weewx/%s" % weewx.__version__)
         self.post_with_retries(req)
 
     def check_response(self, response):
         error = True
         for line in response:
-            if line.find('sz!'):
-                error=False
+
+        # Decode the bytes response to string
+            if isinstance(line, bytes):
+                line = line.decode('latin-1')
+
+            if 'Feltoltes sikeres' in line:
+                error = False
 
         if error:
-            raise weewx.restx.FailedPost("server returned '%s'" % ', '.join(response))
+            syslog.syslog(syslog.LOG_DEBUG, "restx: IDOKEP: Server response: %s" % ', '.join(decoded_response))
+            raise weewx.restx.FailedPost("server returned '%s'" % ', '.join(decoded_response))
 
     def get_url(self, in_record):
-
         # Convert to units required by idokep
         record = weewx.units.to_METRICWX(in_record)
 
         # assemble an array of values in the proper order
-        values = ["{0}={1}".format("user",self.username)]
-        values.append("{0}={1}".format("pass",self.password))
+
+        values = [
+            "user={}".format(urllib.parse.quote_plus(self.username)),
+            "pass={}".format(urllib.parse.quote_plus(self.password))
+        ]
         time_tt = time.localtime(record['dateTime'])
-        values.append("{0}={1}".format("ev",time.strftime("%Y", time_tt)))
-        values.append("{0}={1}".format("ho",time.strftime("%m", time_tt)))
-        values.append("{0}={1}".format("nap",time.strftime("%d", time_tt)))
-        values.append("{0}={1}".format("ora",time.strftime("%H", time_tt)))
-        values.append("{0}={1}".format("perc",time.strftime("%M", time_tt)))
-        values.append("{0}={1}".format("mp",time.strftime("%S", time_tt)))
-        values.append("{0}={1}".format("hom",self._format(record, 'outTemp'))) # C
-        values.append("{0}={1}".format("rh",self._format(record, 'outHumidity'))) # %
-        values.append("{0}={1}".format("szelirany",self._format(record, 'windDir')))
-        values.append("{0}={1}".format("szelero",self._format(record, 'windSpeed'))) # m/s
-        values.append("{0}={1}".format("szellokes",self._format(record, 'windGust'))) # m/s
-        values.append("{0}={1}".format("p",self._format(record, 'barometer'))) # hPa
-        values.append("{0}={1}".format("csap",self._format(record, 'rain24'))) # mm
-        values.append("{0}={1}".format("csap1h",self._format(record, 'hourRain'))) # mm
-        values.append("{0}={1}".format("tipus",self.station_type))
+        values.extend([
+            "ev={}".format(time.strftime("%Y", time_tt)),
+            "ho={}".format(time.strftime("%m", time_tt)),
+            "nap={}".format(time.strftime("%d", time_tt)),
+            "ora={}".format(time.strftime("%H", time_tt)),
+            "perc={}".format(time.strftime("%M", time_tt)),
+            "mp={}".format(time.strftime("%S", time_tt)),
+            "hom={}".format(self._format(record, 'outTemp')),  # C
+            "rh={}".format(self._format(record, 'outHumidity')),  # %
+            "szelirany={}".format(self._format(record, 'windDir')),
+            "szelero={}".format(self._format(record, 'windSpeed')),  # m/s
+            "szellokes={}".format(self._format(record, 'windGust')),  # m/s
+            "p={}".format(self._format(record, 'barometer')),  # hPa
+            "csap={}".format(self._format(record, 'rain')),  # mm
+            "csap1h={}".format(self._format(record, 'rainRate')),  # mm
+            "tipus={}".format(urllib.parse.quote_plus(self.station_type))
+        ])
 
         valstr = '&'.join(values)
         url = self.server_url + '?' + valstr
@@ -212,8 +259,8 @@ class IDOKEPThread(weewx.restx.RESTThread):
         return url
 
     def _format(self, record, label):
-        if record.has_key(label) and record[label] is not None:
-            if self._FORMATS.has_key(label):
+        if label in record and record[label] is not None:
+            if label in self._FORMATS:
                 return self._FORMATS[label] % record[label]
             return str(record[label])
         return ''
